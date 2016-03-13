@@ -46,6 +46,7 @@
   <run_depend>rtt_tf</run_depend>
   <run_depend>rtt_sensor_msgs</run_depend>
   <run_depend>rtt_visualization_msgs</run_depend>
+  <run_depend>rtt_telemanip_msgs</run_depend>
   <run_depend>kdl_typekit</run_depend>
   <run_depend>kdl_parser</run_depend>
   <run_depend>kdl_urdf_tools</run_depend>
@@ -59,6 +60,7 @@
       <plugin_depend>rtt_sensor_msgs</plugin_depend>
       <plugin_depend>rtt_trajectory_msgs</plugin_depend>
       <plugin_depend>rtt_visualization_msgs</plugin_depend>
+      <plugin_depend>rtt_telemanip_msgs</plugin_depend>
       <plugin_depend>rtt_control_msgs</plugin_depend>
       <plugin_depend>rtt_rosparam</plugin_depend>
       <plugin_depend>rtt_roscomm</plugin_depend>

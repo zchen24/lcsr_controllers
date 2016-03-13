@@ -78,15 +78,30 @@ IDControllerKDL::IDControllerKDL(std::string const& name) :
 
 bool IDControllerKDL::configureHook()
 {
+  // Setup logger
+  RTT::Logger::In in("IDControllerKDL");
+
   // ROS parameters
   boost::shared_ptr<rtt_rosparam::ROSParam> rosparam = this->getProvider<rtt_rosparam::ROSParam>("rosparam");
+
   // Get absoluate parameters
-  rosparam->getComponentPrivate("robot_description_param");
-  rosparam->getParam(robot_description_param_, "robot_description");
+  bool param_ok = true;
+  param_ok &= rosparam->getComponentPrivate("robot_description_param");
+  param_ok &= rosparam->getParam(robot_description_param_, "robot_description");
   // Get private parameters
-  rosparam->getComponentPrivate("root_link");
-  rosparam->getComponentPrivate("tip_link");
-  rosparam->getComponentPrivate("gravity");
+  param_ok &= rosparam->getComponentPrivate("root_link");
+  param_ok &= rosparam->getComponentPrivate("tip_link");
+  param_ok &= rosparam->getComponentPrivate("gravity");
+
+  if (!param_ok) {
+    RTT::log(RTT::Error) << "Can not load all params" << RTT::endlog();
+    RTT::log(RTT::Debug) << " robot_desp_param = " << robot_description_param_
+                         << " root_link = " << root_link_
+                         << " tip_link = " << tip_link_
+                         << " gravity = " << gravity_[0] << " " << gravity_[1] << " " << gravity_[2]
+                         << RTT::endlog();
+    return false;
+  }
 
   RTT::log(RTT::Debug) << "Initializing kinematic and dynamic parameters from \"" << root_link_ << "\" to \"" << tip_link_ <<"\"" << RTT::endlog();
 

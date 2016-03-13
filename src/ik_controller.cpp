@@ -75,17 +75,31 @@ IKController::IKController(std::string const& name) :
 
 bool IKController::configureHook()
 {
+  RTT::Logger::In in("IKController");
+
   // ROS parameters
   boost::shared_ptr<rtt_rosparam::ROSParam> rosparam = this->getProvider<rtt_rosparam::ROSParam>("rosparam");
   // Get private parameters
-  rosparam->getComponentPrivate("root_link");
-  rosparam->getComponentPrivate("tip_link");
-  rosparam->getComponentPrivate("target_frame");
-  rosparam->getComponentPrivate("kp");
-  rosparam->getComponentPrivate("kd");
-  rosparam->getComponentPrivate("hint_modes");
-  rosparam->getComponentPrivate("hint_positions");
-  rosparam->getComponentPrivate("damping");
+  bool param_ok = true;
+  param_ok &= rosparam->getComponentPrivate("root_link");
+  param_ok &= rosparam->getComponentPrivate("tip_link");
+  param_ok &= rosparam->getComponentPrivate("target_frame");
+  param_ok &= rosparam->getComponentPrivate("hint_modes");
+  param_ok &= rosparam->getComponentPrivate("hint_positions");
+  param_ok &= rosparam->getComponentPrivate("damping");
+
+  // sanity check
+  if (!param_ok) {
+    RTT::log(RTT::Error) << "Can not load all params" << RTT::endlog();
+    RTT::log(RTT::Debug) << " root_link = " << root_link_
+                         << " tip_link = " << tip_link_
+                         << " target_frame = " << target_frame_
+                         << " hint_modes.size = " << hint_modes_.size()
+                         << " hint_positions = " << hint_positions_
+                         << " damping = " << damping_
+                         << RTT::endlog();
+    return false;
+  }
 
   rosparam->getComponentPrivate("robot_description_param");
   rosparam->getParam(robot_description_param_, "robot_description");
