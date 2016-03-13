@@ -34,6 +34,10 @@ JointPIDController::JointPIDController(std::string const& name) :
   ,compensate_friction_(false)
   ,static_eps_(0.0)
   ,verbose_(false)
+  ,is_first_start_(true)
+  ,is_ros_mode_(false)
+  ,is_antiwindup_(false)
+  ,debug_ver_(3)
   ,chain_dynamics_(NULL)
 {
   // Declare properties
@@ -54,6 +58,13 @@ JointPIDController::JointPIDController(std::string const& name) :
   this->addProperty("static_eps",static_eps_).doc("Static friction velocity deadband.");
   this->addProperty("verbose",verbose_).doc("Verbose output.");
 
+  this->addProperty("is_first_start",is_first_start_);
+  this->addProperty("is_ros_mode",is_ros_mode_);
+  this->addProperty("is_antiwindup",is_antiwindup_);
+  this->addProperty("debug_ver_",debug_ver_);
+  this->addProperty("t_gains", t_gains_);
+  this->addProperty("torque_limits", torque_limits_);
+
   // Configure data ports
   this->ports()->addPort("joint_position_in", joint_position_in_);
   this->ports()->addPort("joint_velocity_in", joint_velocity_in_);
@@ -63,6 +74,7 @@ JointPIDController::JointPIDController(std::string const& name) :
     .doc("Output port: nx1 vector of joint torques. (n joints)");
 
   // ROS ports
+  this->ports()->addPort("joint_position_cmd_ros_in", joint_position_cmd_ros_in_);
   this->ports()->addPort("joint_state_desired_out", joint_state_desired_out_);
 
   // Load Conman interface
@@ -114,7 +126,8 @@ bool JointPIDController::configureHook()
   }
 
   // ROS topics
-  if(!joint_state_desired_out_.createStream(rtt_roscomm::topic("~" + this->getName() + "/joint_state_desired")))
+  if(!joint_state_desired_out_.createStream(rtt_roscomm::topic("~" + this->getName() + "/joint_state_desired"))
+     || !joint_position_cmd_ros_in_.createStream(rtt_roscomm::topic("~" + this->getName() + "/joint_position_cmd")))
   {
     RTT::log(RTT::Error) << "ROS Topics could not be streamed..." <<RTT::endlog();
     return false;
@@ -139,6 +152,12 @@ bool JointPIDController::configureHook()
   i_gains_.resize(n_dof_);
   d_gains_.resize(n_dof_);
   i_clamps_.resize(n_dof_);
+  t_gains_.resize(n_dof_);
+  torque_limits_.resize(n_dof_);
+
+  joint_effort_cmd_.resize(n_dof_);
+  joint_effort_cmd_clamped_.resize(n_dof_);
+  joint_i_error_antiwindup_.resize(n_dof_);
 
   static_effort_.resize(n_dof_);
   static_effort_.setZero();
@@ -149,6 +168,11 @@ bool JointPIDController::configureHook()
   i_gains_.setZero();
   d_gains_.setZero();
   i_clamps_.setZero();
+  t_gains_.setZero();
+  torque_limits_.setZero();
+  joint_effort_cmd_.setZero();
+  joint_effort_cmd_clamped_.setZero();
+  joint_i_error_antiwindup_.setZero();
 
   rosparam->getComponentPrivate("p_gains");
   rosparam->getComponentPrivate("i_gains");
@@ -161,6 +185,8 @@ bool JointPIDController::configureHook()
   rosparam->getComponentPrivate("static_deadband");
   rosparam->getComponentPrivate("static_eps");
   rosparam->getComponentPrivate("verbose");
+  rosparam->getComponentPrivate("t_gains");
+  rosparam->getComponentPrivate("torque_limits");
 
   // Prepare ports for realtime processing
   joint_effort_out_.setDataSample(joint_effort_);
@@ -178,12 +204,16 @@ bool JointPIDController::startHook()
   joint_p_error_last_.setZero();
   joint_i_error_.setZero();
   joint_d_error_.setZero();
+  joint_i_error_antiwindup_.setZero();
 
   joint_position_in_.clear();
   joint_velocity_in_.clear();
   joint_position_cmd_in_.clear();
   joint_velocity_cmd_in_.clear();
   // TODO: Check sizes of all vectors
+
+  is_first_start_ = true;
+  is_ros_mode_ = false;
 
   return true;
 }
@@ -216,6 +246,11 @@ void JointPIDController::updateHook()
     return;
   }
 
+  if (is_first_start_) {
+    is_first_start_ = false;
+    joint_position_cmd_ = joint_position_;
+  }
+
   // Read in the current commanded joint positions and velocities
   // These commands can be sparse and not return new information each update tick
   RTT::FlowStatus
@@ -223,9 +258,27 @@ void JointPIDController::updateHook()
     vel_cmd_status = joint_velocity_cmd_in_.readNewest( joint_velocity_cmd_ ),
     accel_cmd_status = joint_acceleration_cmd_in_.readNewest( joint_acceleration_cmd_ );
 
-  if(pos_cmd_status != RTT::NewData || vel_cmd_status != RTT::NewData) {
-    return;
+  RTT::FlowStatus ros_pos_cmd_status = joint_position_cmd_ros_in_.readNewest( joint_state_cmd_ );
+  if (ros_pos_cmd_status == RTT::NewData) {
+    is_ros_mode_ = true;
   }
+
+  if (!is_ros_mode_) {
+    if (pos_cmd_status != RTT::NewData || vel_cmd_status != RTT::NewData) {
+      return;
+    }
+  }
+
+  // ros cmd overrides RTT commands if new
+  if (ros_pos_cmd_status == RTT::NewData) {
+    // size check
+    if (joint_state_cmd_.position.size() == n_dof_) {
+      std::copy(joint_state_cmd_.position.begin(), joint_state_cmd_.position.begin() + n_dof_, joint_position_cmd_.data());
+    }
+  }
+
+  // always set joint_velocity_cmd_ to Zero
+  joint_velocity_cmd_ = Eigen::VectorXd::Zero(n_dof_);
 
   if(accel_cmd_status != RTT::NewData) {
     joint_acceleration_cmd_ = Eigen::VectorXd::Zero(n_dof_);
@@ -272,7 +325,35 @@ void JointPIDController::updateHook()
     }
 
     // Compute the command
-    if(compensate_friction_) {
+    if(is_antiwindup_) {
+      joint_i_error_antiwindup_ =
+          (joint_i_error_antiwindup_.array()
+           + i_gains_.array() * joint_p_error_.array()
+           + t_gains_.array() * (joint_effort_cmd_clamped_ - joint_effort_cmd_).array()).matrix();
+
+      joint_effort_cmd_ =
+          (p_gains_.array() * joint_p_error_.array()
+           + d_gains_.array() * joint_d_error_.array()).matrix();
+
+      if (debug_ver_ > 0) {
+        for (size_t i = 4; i < n_dof_; i++) {
+          double nonlinear_th = 1.0 * 3.1415926 / 180.0; // 1 deg
+          if (fabs(joint_p_error_(i)) < nonlinear_th){
+            joint_effort_cmd_(i) = joint_effort_cmd_(i) * fabs(joint_p_error_(i)) / nonlinear_th;
+          }
+        }
+      }
+      joint_effort_cmd_ = joint_effort_cmd_ + joint_i_error_antiwindup_;
+
+      joint_effort_cmd_clamped_ =
+          (joint_effort_cmd_.array()
+           .max(-torque_limits_.array()))
+          .min(torque_limits_.array());
+
+      joint_effort_ = joint_effort_cmd_clamped_;
+
+    }
+    else if(compensate_friction_) {
       for(unsigned i=0; i<n_dof_; i++) {
         joint_effort_(i) =
           JointFrictionCompensatorHSS::Compensate(
@@ -290,6 +371,15 @@ void JointPIDController::updateHook()
         (p_gains_.array()*joint_p_error_.array()
          + i_gains_.array()*joint_i_error_.array()
          + d_gains_.array()*joint_d_error_.array()).matrix();
+
+      if (debug_ver_ > 0) {
+        for (size_t i = 4; i < n_dof_; i++) {
+          double nonlinear_th = 1.0 * 3.1415926 / 180.0; // 1 deg
+          if (fabs(joint_p_error_(i)) < nonlinear_th){
+            joint_effort_(i) = joint_effort_(i) * fabs(joint_p_error_(i)) / nonlinear_th;
+          }
+        }
+      }
     }
   }
 
@@ -297,7 +387,7 @@ void JointPIDController::updateHook()
   joint_effort_out_.write(joint_effort_);
 
   // Publish debug traj to ros
-  if(ros_publish_throttle_.ready(0.02))
+  if(ros_publish_throttle_.ready(0.002))
   {
     // Publish controller desired state
     joint_state_desired_.header.stamp = rtt_rosclock::host_now();

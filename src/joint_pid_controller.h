@@ -40,6 +40,13 @@ namespace lcsr_controllers {
     bool compensate_friction_;
     double static_eps_;
     bool verbose_;
+    bool is_first_start_;
+    bool is_ros_mode_;
+    bool is_antiwindup_;
+    int debug_ver_;
+
+    Eigen::VectorXd t_gains_;
+    Eigen::VectorXd torque_limits_;
 
     // RTT Ports
     RTT::InputPort<Eigen::VectorXd> joint_position_in_;
@@ -48,6 +55,9 @@ namespace lcsr_controllers {
     RTT::InputPort<Eigen::VectorXd> joint_velocity_cmd_in_;
     RTT::InputPort<Eigen::VectorXd> joint_acceleration_cmd_in_;
     RTT::OutputPort<Eigen::VectorXd> joint_effort_out_;
+
+    // RTT Ports ROS
+    RTT::InputPort<sensor_msgs::JointState> joint_position_cmd_ros_in_;
     RTT::OutputPort<sensor_msgs::JointState> joint_state_desired_out_;
 
   public:
@@ -82,11 +92,16 @@ namespace lcsr_controllers {
       static_effort_,
       static_deadband_;
 
+    Eigen::VectorXd joint_effort_cmd_;
+    Eigen::VectorXd joint_effort_cmd_clamped_;
+    Eigen::VectorXd joint_i_error_antiwindup_;
+
     bool has_last_position_data_;
 
     // Conman interface
     boost::shared_ptr<conman::Hook> conman_hook_;
 
+    sensor_msgs::JointState joint_state_cmd_;
     sensor_msgs::JointState joint_state_desired_;
     rtt_ros_tools::PeriodicThrottle ros_publish_throttle_;
 
