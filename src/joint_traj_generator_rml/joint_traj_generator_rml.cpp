@@ -903,6 +903,9 @@ bool JointTrajGeneratorRML::startHook()
   // Enable all joints
   rml_in_->SetSelectionVector(rml_true_);
 
+  // Always start in inactive state
+  traj_mode_ = INACTIVE;
+
   return true;
 }
 
